@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: vg-mongo-proxy
+    runtime: python
+    plan: free
+    buildCommand: pip install .
+    startCommand: uvicorn vg_mongo_proxy.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: MONGODB_URI
+        sync: false # Set in Render Dashboard: your MongoDB Atlas connection string
+      - key: PROXY_API_KEY
+        generateValue: true # Generates a secure random key or set your own
+      - key: DEFAULT_DATABASE
+        value: tasks_db
+      - key: CORS_ORIGINS
+        value: "*" # Set to your GitHub Pages URL, e.g., https://espinosa012.github.io
