@@ -1,126 +1,120 @@
 # vg-mongo-proxy
 
-> **FastAPI MongoDB HTTP Proxy** con Data API genérica y almacenamiento de archivos mediante MongoDB GridFS. Diseñado para permitir que aplicaciones web frontend (SPAs, Jamstack, static sites, Edge workers) consulten e interactúen con MongoDB Atlas o cualquier clúster de MongoDB de forma segura y sin exponer credenciales en el cliente.
+Proxy HTTP desarrollado con FastAPI y Motor para gestionar operaciones sobre clústeres de MongoDB (incluyendo MongoDB Atlas) y almacenamiento de archivos mediante GridFS. Diseñado para permitir la integración segura desde aplicaciones cliente o arquitecturas frontend desacopladas (SPAs, Jamstack, Edge functions) sin exponer credenciales de base de datos en el cliente.
 
 ---
 
-## 📑 Tabla de Contenidos
+## Tabla de Contenidos
 
-- [Arquitectura](#-arquitectura)
-- [Gestión de Secretos y Seguridad](#-gestión-de-secretos-y-seguridad)
-- [Despliegue en Render](#-despliegue-en-render)
-- [Integración Frontend (JavaScript)](#-integración-frontend-javascript)
-- [Referencia de la API](#-referencia-de-la-api)
-- [Desarrollo Local](#-desarrollo-local)
+- [Arquitectura](#arquitectura)
+- [Seguridad y Gestión de Credenciales](#seguridad-y-gestión-de-credenciales)
+- [Despliegue](#despliegue)
+- [Integración en Cliente](#integración-en-cliente)
+- [Especificación de la API](#especificación-de-la-api)
+- [Entorno de Desarrollo](#entorno-de-desarrollo)
 
 ---
 
-## 🏛 Arquitectura
+## Arquitectura
 
 ```
 +------------------------------------+
-|     Frontend / Web App             |
-|     (Cualquier cliente web / SPA)  |
-|  * Solo conoce la URL del proxy    |
-|  * Envia cabecera x-api-key        |
+|        Cliente / Frontend          |
+|    (SPA, Jamstack, Edge Worker)    |
+|  * Comunicación exclusiva por HTTPS|
+|  * Autenticación mediante cabecera |
 +------------------------------------+
                  |
-                 | HTTPS / Fetch (CORS configurado)
+                 | HTTPS / Fetch (CORS)
+                 | Header: x-api-key
                  v
 +------------------------------------+
-|     vg-mongo-proxy (en Render)     |
+|          vg-mongo-proxy            |
 |  * Python 3.11 + FastAPI + Motor   |
-|  * Valida x-api-key y CORS         |
-|  * Custodia MONGODB_URI en secreto |
-|  * Mantiene pool de conexiones     |
+|  * Validación de API Key y CORS    |
+|  * Pool de conexiones asíncrono    |
+|  * Aislamiento de credenciales     |
 +------------------------------------+
                  |
                  | TCP / TLS (Driver MongoDB)
                  v
 +------------------------------------+
-|        MongoDB Atlas               |
-|  * Colecciones de datos            |
+|           MongoDB Atlas            |
+|  * Colecciones de documentos       |
 |  * Buckets GridFS (fs.files/chunks)|
 +------------------------------------+
 ```
 
 ---
 
-## 🔐 Gestión de Secretos y Seguridad
+## Seguridad y Gestión de Credenciales
 
-### ¿Dónde se guarda la cadena de conexión de MongoDB (`MONGODB_URI`)?
+La cadena de conexión a la base de datos (`MONGODB_URI`) contiene información crítica de acceso y nunca debe ser expuesta ni almacenada en el código fuente ni en el cliente web.
 
-1. **En Producción (Render):**
-   - **NUNCA en el código fuente ni en el repositorio.**
-   - En el panel de **Render**, entra a tu servicio y dirígete a:  
-     `Environment` ➔ `Environment Variables`.
-   - Añade la variable:
-     - **Key:** `MONGODB_URI`
-     - **Value:** `mongodb+srv://<usuario>:<password>@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority`
-   - Render cifra esta variable en reposo y solo la expone en memoria al proceso de la aplicación en tiempo de ejecución.
+### 1. Entorno de Producción (Render)
+* Las credenciales se configuran como variables de entorno directamente en el panel de control del servicio (`Environment` > `Environment Variables`):
+  * `MONGODB_URI`: Cadena de conexión al clúster (`mongodb+srv://...`).
+  * `PROXY_API_KEY`: Clave estricta de autorización para acceder al proxy.
+  * `DEFAULT_DATABASE`: Nombre de la base de datos predeterminada.
+  * `CORS_ORIGINS`: Lista delimitada por comas de orígenes HTTP autorizados.
+* Estas variables son inyectadas en memoria durante la ejecución del proceso y permanecen cifradas en reposo.
 
-2. **En Local (Desarrollo):**
-   - Se guarda en un archivo `.env` en la raíz del repositorio.
-   - El archivo `.env` está expresamente incluido en `.gitignore` y **jamás** se sube al control de versiones.
-   - Utiliza `.env.example` como plantilla.
+### 2. Entorno Local (Desarrollo)
+* Se definen en un archivo `.env` local en la raíz del proyecto.
+* El archivo `.env` está explícitamente excluido en `.gitignore` para evitar su inclusión accidental en el sistema de control de versiones. Se proporciona un archivo `.env.example` como plantilla referencial.
 
-3. **En el Frontend / Cliente:**
-   - **¡El string de conexión a MongoDB NUNCA debe estar en el cliente!**
-   - El código en el navegador o cliente web únicamente necesita:
-     - La URL del servicio en Render (ej. `https://tu-servicio.onrender.com`).
-     - La clave de acceso `x-api-key` (la misma que defines en Render como `PROXY_API_KEY`).
+### 3. Aislamiento del Cliente
+* Las aplicaciones frontend únicamente interactúan con la interfaz HTTP del proxy utilizando la URL pública del servicio y la cabecera `x-api-key`. Bajo ninguna circunstancia deben tener visibilidad de las credenciales de MongoDB.
 
 ---
 
-## 🚀 Despliegue en Render
+## Despliegue
 
-### Opción 1: Crear Web Service Manualmente
-1. Entra a [Render Dashboard](https://dashboard.render.com/) y pulsa **New +** ➔ **Web Service**.
-2. Conecta tu repositorio de GitHub.
-3. Configura los siguientes campos:
-   - **Runtime:** `Python`
-   - **Build Command:** `pip install .`
-   - **Start Command:** `uvicorn vg_mongo_proxy.main:app --host 0.0.0.0 --port $PORT`
-4. En **Environment Variables**, añade:
-   - `MONGODB_URI`: Tu cadena de conexión a MongoDB Atlas.
-   - `PROXY_API_KEY`: Una clave secreta para autorizar peticiones a la API.
-   - `DEFAULT_DATABASE`: Nombre de la base de datos por defecto (ej. `app_db`).
-   - `CORS_ORIGINS`: Dominio(s) de tu frontend autorizados (ej. `https://tu-dominio.com,http://localhost:5173`).
-5. Pulsa **Deploy Web Service**.
+### Despliegue Manual en Render
+1. Acceder al panel de control de Render y crear un nuevo **Web Service**.
+2. Vincular el repositorio del proyecto.
+3. Especificar los parámetros de ejecución:
+   * **Runtime:** `Python`
+   * **Build Command:** `pip install .`
+   * **Start Command:** `uvicorn vg_mongo_proxy.main:app --host 0.0.0.0 --port $PORT`
+4. Declarar las variables de entorno requeridas:
+   * `MONGODB_URI`: Cadena de conexión a MongoDB.
+   * `PROXY_API_KEY`: Clave de seguridad del proxy.
+   * `DEFAULT_DATABASE`: Base de datos objetivo.
+   * `CORS_ORIGINS`: Orígenes autorizados (ejemplo: `https://tu-dominio.com`).
 
-### Opción 2: Usar Render Blueprint (`render.yaml`)
-El repositorio incluye un archivo [`render.yaml`](./render.yaml). Puedes crear un nuevo **Blueprint** en Render apuntando a este repositorio y Render detectará automáticamente toda la configuración.
+### Despliegue Automatizado (Blueprint)
+El repositorio incluye el archivo de especificación `render.yaml`. Es posible inicializar el servicio seleccionando la opción **Blueprint** en Render, lo cual aprovisiona automáticamente la infraestructura y configura la ruta de healthcheck.
 
 ---
 
-## 💻 Integración Frontend (JavaScript)
+## Integración en Cliente
 
-### 1. Cliente Base y Manejo de Cold Starts (Render Free Tier)
+### 1. Inicialización y Comprobación de Estado (Health Check)
 
-Los servicios en la capa gratuita de Render entran en suspensión tras 15 minutos sin tráfico. Puedes usar el endpoint público `/health` para despertar el proxy y verificar conectividad:
+En instancias con suspensión por inactividad (como el nivel gratuito de Render), se recomienda consultar el endpoint `/health` al inicio del ciclo de vida de la aplicación:
 
 ```javascript
 const PROXY_URL = "https://tu-servicio.onrender.com";
-const API_KEY = "tu-clave-secreta-definida-en-render";
+const API_KEY = "clave-configurada-en-el-proxy";
 
-// Comprobar conexion / despertar servidor
-async function checkServerHealth() {
+async function verifyConnection() {
   try {
-    const res = await fetch(`${PROXY_URL}/health`);
-    const data = await res.json();
+    const response = await fetch(`${PROXY_URL}/health`);
+    const data = await response.json();
     return data.status === "healthy";
-  } catch (err) {
-    console.warn("Despertando servidor en Render...", err);
+  } catch (error) {
+    console.error("Error al conectar con el proxy:", error);
     return false;
   }
 }
 ```
 
-### 2. Crear un Documento (`insertOne`)
+### 2. Inserción de Documentos (`insertOne`)
 
 ```javascript
-async function createDocument(collection, documentData) {
-  const res = await fetch(`${PROXY_URL}/action/insertOne`, {
+async function insertDocument(collection, document) {
+  const response = await fetch(`${PROXY_URL}/action/insertOne`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -129,21 +123,21 @@ async function createDocument(collection, documentData) {
     body: JSON.stringify({
       collection,
       document: {
-        ...documentData,
+        ...document,
         createdAt: { "$date": new Date().toISOString() },
       },
     }),
   });
-  const data = await res.json();
-  return data.insertedId; // ID del documento creado
+  const data = await response.json();
+  return data.insertedId;
 }
 ```
 
-### 3. Consultar Documentos (`find`)
+### 3. Consulta de Documentos (`find`)
 
 ```javascript
-async function getDocuments(collection, filter = {}, sort = { createdAt: -1 }, limit = 50) {
-  const res = await fetch(`${PROXY_URL}/action/find`, {
+async function queryDocuments(collection, filter = {}, sort = { createdAt: -1 }, limit = 50) {
+  const response = await fetch(`${PROXY_URL}/action/find`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -156,75 +150,70 @@ async function getDocuments(collection, filter = {}, sort = { createdAt: -1 }, l
       limit,
     }),
   });
-  const data = await res.json();
+  const data = await response.json();
   return data.documents;
 }
 ```
 
-### 4. Subir un Fichero Adjunto (`/files/upload` vía GridFS)
+### 4. Carga de Archivos Binarios (`/files/upload`)
 
 ```javascript
-async function uploadAttachment(fileInput) {
-  const file = fileInput.files[0];
+async function uploadFile(fileInstance) {
   const formData = new FormData();
-  formData.append("file", file);
+  formData.append("file", fileInstance);
 
-  const res = await fetch(`${PROXY_URL}/files/upload`, {
+  const response = await fetch(`${PROXY_URL}/files/upload`, {
     method: "POST",
     headers: {
-      "x-api-key": API_KEY, // multipart no debe llevar Content-Type manual
+      "x-api-key": API_KEY,
     },
     body: formData,
   });
 
-  const fileData = await res.json();
-  // Devuelve: { fileId: "...", filename: "doc.pdf", contentType: "application/pdf", length: 1048576 }
-  return fileData;
+  return await response.json();
 }
 ```
 
-### 5. Mostrar o Descargar un Fichero
-
-Puedes cargar imágenes directamente en etiquetas `<img>` o enlaces pasándoles la clave en la URL:
+### 5. Recuperación y Visualización de Archivos
 
 ```html
 <!-- Enlace de descarga directa -->
-<a href="https://tu-servicio.onrender.com/files/60d5ec49f1b2c8b1f8e4e1a1?key=tu-clave-secreta&download=true">
-  Descargar Fichero
+<a href="https://tu-servicio.onrender.com/files/60d5ec49f1b2c8b1f8e4e1a1?key=clave-configurada-en-el-proxy&download=true">
+  Descargar documento
 </a>
 
-<!-- Imagen directa en el navegador -->
-<img src="https://tu-servicio.onrender.com/files/60d5ec49f1b2c8b1f8e4e1a1?key=tu-clave-secreta" alt="Vista previa" />
+<!-- Visualización en línea (imágenes) -->
+<img src="https://tu-servicio.onrender.com/files/60d5ec49f1b2c8b1f8e4e1a1?key=clave-configurada-en-el-proxy" alt="Archivo" />
 ```
 
 ---
 
-## 📡 Referencia Detallada de la API
+## Especificación de la API
 
-### Cabeceras Globales
-* `x-api-key` (*string, obligatorio*): Clave de autenticación para proteger todos los endpoints bajo `/action/*` y `/files/*`.
-* `x-mongo-uri` (*string, opcional*): Permite sobreescribir la conexión de MongoDB para una petición específica en lugar de usar `MONGODB_URI`.
+### Cabeceras de Solicitud
+* `x-api-key` (*string, requerida en rutas protegidas*): Token de autenticación del proxy.
+* `x-mongo-uri` (*string, opcional*): Cadena de conexión alternativa para redirigir dinámicamente la consulta a otro clúster.
 
-### Manejo de Tipos BSON (EJSON)
-* **ObjectIds:** Puedes enviar `_id` como un string hexadecimal estándar de 24 caracteres (ej. `"60d5ec49f1b2c8b1f8e4e1a1"`) o en formato Extended JSON (`{"$oid": "..."}`). La API los normaliza automáticamente.
-* **Fechas:** Utiliza la sintaxis Extended JSON: `{"$date": "2026-05-01T12:00:00Z"}`.
-* **Operadores MongoDB:** Admite operadores nativos como `$set`, `$inc`, `$in`, `$gt`, `$push`, etc.
+### Convenciones de Tipos BSON (Extended JSON)
+* **Identificadores (`_id`):** Se admite el formato hexadecimal estándar de 24 caracteres (`"60d5ec49f1b2c8b1f8e4e1a1"`) o el esquema canónico Extended JSON (`{"$oid": "..."}`).
+* **Fechas:** Se procesan mediante el formato estándar de fecha ISO: `{"$date": "2026-05-01T12:00:00Z"}`.
+* **Operadores:** Compatible con operadores estándar de MongoDB (`$set`, `$inc`, `$push`, `$in`, `$gt`, etc.).
 
 ---
 
-### 1. Endpoints de Sistema
+### Endpoints del Sistema
 
 #### `GET /health`
-Comprueba el estado del servicio y mide la latencia de ping hacia MongoDB Atlas. No requiere autenticación.
+Verifica la disponibilidad del servicio y la conectividad con la instancia de MongoDB. Ruta pública.
 * **Respuesta exitosa (200 OK):**
   ```json
   {
     "status": "healthy",
     "database": "connected",
-    "latency_ms": 14.25
+    "latency_ms": 12.4
   }
   ```
-* **Respuesta de fallo (503 Service Unavailable):**
+* **Fallo de conectividad (503 Service Unavailable):**
   ```json
   {
     "status": "unhealthy",
@@ -234,38 +223,38 @@ Comprueba el estado del servicio y mide la latencia de ping hacia MongoDB Atlas.
   ```
 
 #### `GET /docs`
-Interfaz interactiva **Swagger UI** autogenerada por FastAPI. Permite probar y explorar todos los endpoints directamente desde el navegador.
+Documentación interactiva OpenAPI (Swagger UI) generada automáticamente por FastAPI.
 
 ---
 
-### 2. Data API (`/action/*`)
+### Endpoints de Datos (`/action/*`)
 
 #### `POST /action/find`
-Consulta múltiples documentos que coincidan con un filtro.
-* **Body:**
+Recupera un conjunto de documentos según los criterios especificados.
+* **Cuerpo de la solicitud:**
   ```json
   {
-    "database": "app_db",       // Opcional (usa DEFAULT_DATABASE si se omite)
-    "collection": "items",       // Obligatorio
+    "database": "app_db",       // Opcional
+    "collection": "items",       // Requerido
     "filter": { "status": "active" },
     "projection": { "title": 1, "price": 1 },
-    "sort": { "createdAt": -1 }, // 1 ascendente, -1 descendente
-    "limit": 50,                 // Maximo: 5000 (defecto: 100)
-    "skip": 0                    // Paginacion
+    "sort": { "createdAt": -1 },
+    "limit": 50,
+    "skip": 0
   }
   ```
 * **Respuesta (200 OK):**
   ```json
   {
     "documents": [
-      { "_id": "60d5ec49f1b2c8b1f8e4e1a1", "title": "Item 1", "price": 25.5 }
+      { "_id": "60d5ec49f1b2c8b1f8e4e1a1", "title": "Ejemplo", "price": 10.0 }
     ]
   }
   ```
 
 #### `POST /action/findOne`
-Obtiene un único documento coincidente.
-* **Body:**
+Recupera el primer documento que coincide con el filtro.
+* **Cuerpo de la solicitud:**
   ```json
   {
     "collection": "items",
@@ -275,14 +264,13 @@ Obtiene un único documento coincidente.
 * **Respuesta (200 OK):**
   ```json
   {
-    "document": { "_id": "60d5ec49f1b2c8b1f8e4e1a1", "title": "Item 1" }
+    "document": { "_id": "60d5ec49f1b2c8b1f8e4e1a1", "title": "Ejemplo" }
   }
   ```
-  *(Devuelve `"document": null` si no se encuentra ningún registro).*
 
 #### `POST /action/count`
-Cuenta el número de documentos que cumplen una condición.
-* **Body:**
+Devuelve el número total de documentos que coinciden con el filtro.
+* **Cuerpo de la solicitud:**
   ```json
   {
     "collection": "items",
@@ -292,13 +280,13 @@ Cuenta el número de documentos que cumplen una condición.
 * **Respuesta (200 OK):**
   ```json
   {
-    "count": 42
+    "count": 128
   }
   ```
 
 #### `POST /action/aggregate`
-Ejecuta un pipeline de agregación en MongoDB.
-* **Body:**
+Ejecuta un pipeline de agregación en la colección destino.
+* **Cuerpo de la solicitud:**
   ```json
   {
     "collection": "items",
@@ -312,20 +300,20 @@ Ejecuta un pipeline de agregación en MongoDB.
   ```json
   {
     "documents": [
-      { "_id": "electronics", "total": 1540.0 }
+      { "_id": "categoria_a", "total": 520.0 }
     ]
   }
   ```
 
 #### `POST /action/insertOne`
-Inserta un único documento en la colección.
-* **Body:**
+Inserta un único documento.
+* **Cuerpo de la solicitud:**
   ```json
   {
     "collection": "items",
     "document": {
-      "title": "Nuevo Producto",
-      "stock": 10
+      "title": "Registro",
+      "status": "pending"
     }
   }
   ```
@@ -337,14 +325,14 @@ Inserta un único documento en la colección.
   ```
 
 #### `POST /action/insertMany`
-Inserta una lista de documentos.
-* **Body:**
+Inserta múltiples documentos secuencialmente en una única operación.
+* **Cuerpo de la solicitud:**
   ```json
   {
     "collection": "items",
     "documents": [
-      { "title": "Producto A", "stock": 5 },
-      { "title": "Producto B", "stock": 8 }
+      { "title": "Registro 1" },
+      { "title": "Registro 2" }
     ]
   }
   ```
@@ -359,15 +347,14 @@ Inserta una lista de documentos.
   ```
 
 #### `POST /action/updateOne`
-Actualiza el primer documento que cumpla el filtro.
-* **Body:**
+Actualiza el primer documento coincidente.
+* **Cuerpo de la solicitud:**
   ```json
   {
     "collection": "items",
     "filter": { "_id": "60d5ec49f1b2c8b1f8e4e1a1" },
     "update": {
-      "$set": { "stock": 15 },
-      "$currentDate": { "lastModified": true }
+      "$set": { "status": "processed" }
     },
     "upsert": false
   }
@@ -381,26 +368,28 @@ Actualiza el primer documento que cumpla el filtro.
   ```
 
 #### `POST /action/updateMany`
-Actualiza todos los documentos que coincidan con el filtro.
-* **Body:**
+Actualiza todos los documentos coincidentes.
+* **Cuerpo de la solicitud:**
   ```json
   {
     "collection": "items",
-    "filter": { "status": "draft" },
-    "update": { "$set": { "status": "archived" } }
+    "filter": { "status": "pending" },
+    "update": {
+      "$set": { "status": "archived" }
+    }
   }
   ```
 * **Respuesta (200 OK):**
   ```json
   {
-    "matchedCount": 8,
-    "modifiedCount": 8
+    "matchedCount": 15,
+    "modifiedCount": 15
   }
   ```
 
 #### `POST /action/deleteOne` / `POST /action/deleteMany`
-Elimina uno o varios documentos coincidentes.
-* **Body:**
+Elimina uno o múltiples documentos coincidentes.
+* **Cuerpo de la solicitud:**
   ```json
   {
     "collection": "items",
@@ -416,54 +405,54 @@ Elimina uno o varios documentos coincidentes.
 
 ---
 
-### 3. Ficheros GridFS (`/files/*`)
+### Endpoints de Almacenamiento GridFS (`/files/*`)
 
 #### `POST /files/upload`
-Sube un archivo de cualquier tamaño directamente a MongoDB GridFS mediante streaming continuo.
-* **Content-Type:** `multipart/form-data`
-* **Form fields:**
-  * `file` (*archivo binario, obligatorio*): Fichero a subir.
-  * `database` (*string, opcional*): Nombre de la base de datos destino.
-  * `bucket` (*string, opcional, defecto: `"fs"`*): Nombre del bucket de GridFS.
+Transmite y almacena un archivo binario en MongoDB GridFS mediante flujo continuo sin sobrecarga de memoria.
+* **Formato:** `multipart/form-data`
+* **Campos del formulario:**
+  * `file` (*binario, requerido*): Archivo a almacenar.
+  * `database` (*string, opcional*): Base de datos destino.
+  * `bucket` (*string, opcional, por defecto: `"fs"`*): Nombre del bucket GridFS.
 * **Respuesta (201 Created):**
   ```json
   {
     "fileId": "60d5ec49f1b2c8b1f8e4e1a5",
-    "filename": "factura.pdf",
+    "filename": "documento.pdf",
     "contentType": "application/pdf",
-    "length": 245890
+    "length": 154200
   }
   ```
 
 #### `GET /files/{file_id}`
-Descarga o visualiza el archivo en el navegador en streaming.
-* **Autenticación flexible:**
-  * Vía cabecera: `x-api-key: tu-clave`
-  * O vía query param: `?key=tu-clave` (ideal para `<img src="...">` o enlaces directos).
-* **Parámetros opcionales (Query):**
-  * `download=true`: Fuerza la descarga añadiendo `Content-Disposition: attachment`. Si no se incluye, usa `inline` (para ver PDFs o imágenes directamente en el navegador).
-  * `database`: Nombre de la base de datos si es distinta a la predeterminada.
-  * `bucket`: Nombre del bucket de GridFS (defecto: `fs`).
-* **Respuesta:** Stream binario con las cabeceras `Content-Type`, `Content-Length` y `Content-Disposition` adecuadas.
+Descarga o transmite el contenido de un archivo almacenado.
+* **Mecanismos de autenticación:**
+  * Cabecera HTTP: `x-api-key: <token>`
+  * Parámetro de consulta: `?key=<token>` (para elementos `<img>` o enlaces directos).
+* **Parámetros de consulta (opcionales):**
+  * `download=true`: Establece la cabecera `Content-Disposition` en `attachment`.
+  * `database`: Nombre de la base de datos si difiere de la predeterminada.
+  * `bucket`: Nombre del bucket de almacenamiento.
+* **Respuesta:** Flujo binario continuo con cabeceras `Content-Type`, `Content-Length` y `Content-Disposition`.
 
 #### `GET /files/{file_id}/info`
-Obtiene metadatos del archivo sin descargar el contenido binario.
+Devuelve los metadatos asociados a un archivo sin transmitir el contenido binario.
 * **Respuesta (200 OK):**
   ```json
   {
     "fileId": "60d5ec49f1b2c8b1f8e4e1a5",
-    "filename": "factura.pdf",
-    "length": 245890,
+    "filename": "documento.pdf",
+    "length": 154200,
     "uploadDate": "2026-10-16T22:30:00+00:00",
     "metadata": {
       "contentType": "application/pdf",
-      "originalFilename": "factura.pdf"
+      "originalFilename": "documento.pdf"
     }
   }
   ```
 
 #### `DELETE /files/{file_id}`
-Elimina el archivo y todos sus chunks de datos en GridFS.
+Elimina el registro de metadatos del archivo y todos sus bloques (`chunks`) correspondientes en GridFS.
 * **Respuesta (200 OK):**
   ```json
   {
@@ -472,30 +461,40 @@ Elimina el archivo y todos sus chunks de datos en GridFS.
   }
   ```
 
-
 ---
 
-## 🛠 Desarrollo Local
+## Entorno de Desarrollo
 
+### 1. Clonar el Repositorio
 ```bash
-# 1. Clonar repositorio
-git clone <URL_DE_TU_REPOSITORIO>
+git clone <URL_DEL_REPOSITORIO>
 cd vg-mongo-proxy
+```
 
-# 2. Crear entorno virtual
+### 2. Configurar el Entorno Virtual
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
+```
 
-# 3. Instalar dependencias en modo editable con herramientas de desarrollo
+### 3. Instalar Dependencias
+```bash
 pip install -e ".[dev]"
+```
 
-# 4. Configurar variables de entorno
+### 4. Configurar Variables de Entorno
+```bash
 cp .env.example .env
-# Edita el archivo .env con tus credenciales locales
+```
+Editar el archivo `.env` con los valores de conexión locales correspondientes.
 
-# 5. Ejecutar tests automatizados
+### 5. Ejecutar la Suite de Pruebas
+```bash
 pytest
+```
 
-# 6. Arrancar servidor de desarrollo
+### 6. Iniciar el Servidor de Desarrollo
+```bash
 uvicorn vg_mongo_proxy.main:app --reload --port 8000
 ```
+La documentación interactiva estará disponible en `http://localhost:8000/docs`.
