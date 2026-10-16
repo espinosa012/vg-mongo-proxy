@@ -199,37 +199,279 @@ Puedes cargar imágenes directamente en etiquetas `<img>` o enlaces pasándoles 
 
 ---
 
-## 📡 Referencia de la API
+## 📡 Referencia Detallada de la API
 
-### Sistema
-- `GET /`: Información básica de la versión y estado.
-- `GET /health`: Healthcheck público y ping de latencia con MongoDB.
-- `GET /docs`: Documentación interactiva Swagger UI de FastAPI.
+### Cabeceras Globales
+* `x-api-key` (*string, obligatorio*): Clave de autenticación para proteger todos los endpoints bajo `/action/*` y `/files/*`.
+* `x-mongo-uri` (*string, opcional*): Permite sobreescribir la conexión de MongoDB para una petición específica en lugar de usar `MONGODB_URI`.
 
-### Data API (`/action/*`)
-*Todas las acciones requieren la cabecera `x-api-key`.*
+### Manejo de Tipos BSON (EJSON)
+* **ObjectIds:** Puedes enviar `_id` como un string hexadecimal estándar de 24 caracteres (ej. `"60d5ec49f1b2c8b1f8e4e1a1"`) o en formato Extended JSON (`{"$oid": "..."}`). La API los normaliza automáticamente.
+* **Fechas:** Utiliza la sintaxis Extended JSON: `{"$date": "2026-05-01T12:00:00Z"}`.
+* **Operadores MongoDB:** Admite operadores nativos como `$set`, `$inc`, `$in`, `$gt`, `$push`, etc.
 
-| Endpoint | Parámetros Clave | Descripción |
-| :--- | :--- | :--- |
-| `POST /action/find` | `collection`, `filter`, `projection`, `sort`, `limit`, `skip` | Consultar múltiples documentos |
-| `POST /action/findOne` | `collection`, `filter`, `projection` | Consultar un único documento |
-| `POST /action/count` | `collection`, `filter` | Contar documentos coincidentes |
-| `POST /action/aggregate` | `collection`, `pipeline` | Ejecutar pipeline de agregación |
-| `POST /action/insertOne` | `collection`, `document` | Insertar un documento |
-| `POST /action/insertMany` | `collection`, `documents` | Insertar lista de documentos |
-| `POST /action/updateOne` | `collection`, `filter`, `update`, `upsert` | Actualizar primer documento coincidente |
-| `POST /action/updateMany` | `collection`, `filter`, `update`, `upsert` | Actualizar todos los documentos coincidentes |
-| `POST /action/deleteOne` | `collection`, `filter` | Eliminar un documento |
-| `POST /action/deleteMany` | `collection`, `filter` | Eliminar múltiples documentos |
+---
 
-### Ficheros GridFS (`/files/*`)
+### 1. Endpoints de Sistema
 
-| Endpoint | Método | Parámetros | Descripción |
-| :--- | :--- | :--- | :--- |
-| `/files/upload` | `POST` | `multipart/form-data`: `file`, `bucket?` | Sube un fichero por streaming a GridFS |
-| `/files/{file_id}` | `GET` | `?key=...` o `x-api-key`, `?download=true` | Descarga o previsualiza el fichero en el navegador |
-| `/files/{file_id}/info` | `GET` | Cabecera `x-api-key` | Obtiene metadatos del fichero sin descargar contenido |
-| `/files/{file_id}` | `DELETE` | Cabecera `x-api-key` | Elimina el fichero y sus chunks de GridFS |
+#### `GET /health`
+Comprueba el estado del servicio y mide la latencia de ping hacia MongoDB Atlas. No requiere autenticación.
+* **Respuesta exitosa (200 OK):**
+  ```json
+  {
+    "status": "healthy",
+    "database": "connected",
+    "latency_ms": 14.25
+  }
+  ```
+* **Respuesta de fallo (503 Service Unavailable):**
+  ```json
+  {
+    "status": "unhealthy",
+    "database": "disconnected",
+    "error": "ServerSelectionTimeoutError: ..."
+  }
+  ```
+
+#### `GET /docs`
+Interfaz interactiva **Swagger UI** autogenerada por FastAPI. Permite probar y explorar todos los endpoints directamente desde el navegador.
+
+---
+
+### 2. Data API (`/action/*`)
+
+#### `POST /action/find`
+Consulta múltiples documentos que coincidan con un filtro.
+* **Body:**
+  ```json
+  {
+    "database": "app_db",       // Opcional (usa DEFAULT_DATABASE si se omite)
+    "collection": "items",       // Obligatorio
+    "filter": { "status": "active" },
+    "projection": { "title": 1, "price": 1 },
+    "sort": { "createdAt": -1 }, // 1 ascendente, -1 descendente
+    "limit": 50,                 // Maximo: 5000 (defecto: 100)
+    "skip": 0                    // Paginacion
+  }
+  ```
+* **Respuesta (200 OK):**
+  ```json
+  {
+    "documents": [
+      { "_id": "60d5ec49f1b2c8b1f8e4e1a1", "title": "Item 1", "price": 25.5 }
+    ]
+  }
+  ```
+
+#### `POST /action/findOne`
+Obtiene un único documento coincidente.
+* **Body:**
+  ```json
+  {
+    "collection": "items",
+    "filter": { "_id": "60d5ec49f1b2c8b1f8e4e1a1" }
+  }
+  ```
+* **Respuesta (200 OK):**
+  ```json
+  {
+    "document": { "_id": "60d5ec49f1b2c8b1f8e4e1a1", "title": "Item 1" }
+  }
+  ```
+  *(Devuelve `"document": null` si no se encuentra ningún registro).*
+
+#### `POST /action/count`
+Cuenta el número de documentos que cumplen una condición.
+* **Body:**
+  ```json
+  {
+    "collection": "items",
+    "filter": { "status": "active" }
+  }
+  ```
+* **Respuesta (200 OK):**
+  ```json
+  {
+    "count": 42
+  }
+  ```
+
+#### `POST /action/aggregate`
+Ejecuta un pipeline de agregación en MongoDB.
+* **Body:**
+  ```json
+  {
+    "collection": "items",
+    "pipeline": [
+      { "$match": { "status": "completed" } },
+      { "$group": { "_id": "$category", "total": { "$sum": "$amount" } } }
+    ]
+  }
+  ```
+* **Respuesta (200 OK):**
+  ```json
+  {
+    "documents": [
+      { "_id": "electronics", "total": 1540.0 }
+    ]
+  }
+  ```
+
+#### `POST /action/insertOne`
+Inserta un único documento en la colección.
+* **Body:**
+  ```json
+  {
+    "collection": "items",
+    "document": {
+      "title": "Nuevo Producto",
+      "stock": 10
+    }
+  }
+  ```
+* **Respuesta (201 Created):**
+  ```json
+  {
+    "insertedId": "60d5ec49f1b2c8b1f8e4e1a2"
+  }
+  ```
+
+#### `POST /action/insertMany`
+Inserta una lista de documentos.
+* **Body:**
+  ```json
+  {
+    "collection": "items",
+    "documents": [
+      { "title": "Producto A", "stock": 5 },
+      { "title": "Producto B", "stock": 8 }
+    ]
+  }
+  ```
+* **Respuesta (201 Created):**
+  ```json
+  {
+    "insertedIds": [
+      "60d5ec49f1b2c8b1f8e4e1a3",
+      "60d5ec49f1b2c8b1f8e4e1a4"
+    ]
+  }
+  ```
+
+#### `POST /action/updateOne`
+Actualiza el primer documento que cumpla el filtro.
+* **Body:**
+  ```json
+  {
+    "collection": "items",
+    "filter": { "_id": "60d5ec49f1b2c8b1f8e4e1a1" },
+    "update": {
+      "$set": { "stock": 15 },
+      "$currentDate": { "lastModified": true }
+    },
+    "upsert": false
+  }
+  ```
+* **Respuesta (200 OK):**
+  ```json
+  {
+    "matchedCount": 1,
+    "modifiedCount": 1
+  }
+  ```
+
+#### `POST /action/updateMany`
+Actualiza todos los documentos que coincidan con el filtro.
+* **Body:**
+  ```json
+  {
+    "collection": "items",
+    "filter": { "status": "draft" },
+    "update": { "$set": { "status": "archived" } }
+  }
+  ```
+* **Respuesta (200 OK):**
+  ```json
+  {
+    "matchedCount": 8,
+    "modifiedCount": 8
+  }
+  ```
+
+#### `POST /action/deleteOne` / `POST /action/deleteMany`
+Elimina uno o varios documentos coincidentes.
+* **Body:**
+  ```json
+  {
+    "collection": "items",
+    "filter": { "_id": "60d5ec49f1b2c8b1f8e4e1a1" }
+  }
+  ```
+* **Respuesta (200 OK):**
+  ```json
+  {
+    "deletedCount": 1
+  }
+  ```
+
+---
+
+### 3. Ficheros GridFS (`/files/*`)
+
+#### `POST /files/upload`
+Sube un archivo de cualquier tamaño directamente a MongoDB GridFS mediante streaming continuo.
+* **Content-Type:** `multipart/form-data`
+* **Form fields:**
+  * `file` (*archivo binario, obligatorio*): Fichero a subir.
+  * `database` (*string, opcional*): Nombre de la base de datos destino.
+  * `bucket` (*string, opcional, defecto: `"fs"`*): Nombre del bucket de GridFS.
+* **Respuesta (201 Created):**
+  ```json
+  {
+    "fileId": "60d5ec49f1b2c8b1f8e4e1a5",
+    "filename": "factura.pdf",
+    "contentType": "application/pdf",
+    "length": 245890
+  }
+  ```
+
+#### `GET /files/{file_id}`
+Descarga o visualiza el archivo en el navegador en streaming.
+* **Autenticación flexible:**
+  * Vía cabecera: `x-api-key: tu-clave`
+  * O vía query param: `?key=tu-clave` (ideal para `<img src="...">` o enlaces directos).
+* **Parámetros opcionales (Query):**
+  * `download=true`: Fuerza la descarga añadiendo `Content-Disposition: attachment`. Si no se incluye, usa `inline` (para ver PDFs o imágenes directamente en el navegador).
+  * `database`: Nombre de la base de datos si es distinta a la predeterminada.
+  * `bucket`: Nombre del bucket de GridFS (defecto: `fs`).
+* **Respuesta:** Stream binario con las cabeceras `Content-Type`, `Content-Length` y `Content-Disposition` adecuadas.
+
+#### `GET /files/{file_id}/info`
+Obtiene metadatos del archivo sin descargar el contenido binario.
+* **Respuesta (200 OK):**
+  ```json
+  {
+    "fileId": "60d5ec49f1b2c8b1f8e4e1a5",
+    "filename": "factura.pdf",
+    "length": 245890,
+    "uploadDate": "2026-10-16T22:30:00+00:00",
+    "metadata": {
+      "contentType": "application/pdf",
+      "originalFilename": "factura.pdf"
+    }
+  }
+  ```
+
+#### `DELETE /files/{file_id}`
+Elimina el archivo y todos sus chunks de datos en GridFS.
+* **Respuesta (200 OK):**
+  ```json
+  {
+    "deleted": true,
+    "fileId": "60d5ec49f1b2c8b1f8e4e1a5"
+  }
+  ```
+
 
 ---
 
