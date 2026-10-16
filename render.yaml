@@ -16,4 +16,4 @@ services:
       - key: DEFAULT_DATABASE
         value: tasks_db
       - key: CORS_ORIGINS
-        value: "*" # Set to your GitHub Pages URL, e.g., https://espinosa012.github.io
+        value: "*" # Set to your frontend domain, e.g., https://tu-dominio.com

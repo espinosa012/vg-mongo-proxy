@@ -1,6 +1,6 @@
 # vg-mongo-proxy
 
-> **FastAPI MongoDB HTTP Proxy** con Data API genérica y almacenamiento de archivos mediante MongoDB GridFS. Diseñado para permitir que aplicaciones web frontend (como las alojadas en **GitHub Pages**) consulten e interactúen con MongoDB Atlas de forma segura y sin exponer credenciales.
+> **FastAPI MongoDB HTTP Proxy** con Data API genérica y almacenamiento de archivos mediante MongoDB GridFS. Diseñado para permitir que aplicaciones web frontend (SPAs, Jamstack, static sites, Edge workers) consulten e interactúen con MongoDB Atlas o cualquier clúster de MongoDB de forma segura y sin exponer credenciales en el cliente.
 
 ---
 
@@ -9,7 +9,7 @@
 - [Arquitectura](#-arquitectura)
 - [Gestión de Secretos y Seguridad](#-gestión-de-secretos-y-seguridad)
 - [Despliegue en Render](#-despliegue-en-render)
-- [Integración desde GitHub Pages (JavaScript)](#-integración-desde-github-pages-javascript)
+- [Integración Frontend (JavaScript)](#-integración-frontend-javascript)
 - [Referencia de la API](#-referencia-de-la-api)
 - [Desarrollo Local](#-desarrollo-local)
 
@@ -19,8 +19,8 @@
 
 ```
 +------------------------------------+
-|     App en GitHub Pages            |
-|     https://usuario.github.io/app  |
+|     Frontend / Web App             |
+|     (Cualquier cliente web / SPA)  |
 |  * Solo conoce la URL del proxy    |
 |  * Envia cabecera x-api-key        |
 +------------------------------------+
@@ -39,7 +39,7 @@
                  v
 +------------------------------------+
 |        MongoDB Atlas               |
-|  * Colecciones (tasks, etc.)       |
+|  * Colecciones de datos            |
 |  * Buckets GridFS (fs.files/chunks)|
 +------------------------------------+
 ```
@@ -48,27 +48,27 @@
 
 ## 🔐 Gestión de Secretos y Seguridad
 
-### ¿Dónde se guarda la cadena de conexión de MongoDB Atlas (`MONGODB_URI`)?
+### ¿Dónde se guarda la cadena de conexión de MongoDB (`MONGODB_URI`)?
 
 1. **En Producción (Render):**
-   - **NUNCA en el código ni en GitHub.**
-   - En el dashboard de **Render**, entra a tu servicio y dirígete a:  
+   - **NUNCA en el código fuente ni en el repositorio.**
+   - En el panel de **Render**, entra a tu servicio y dirígete a:  
      `Environment` ➔ `Environment Variables`.
    - Añade la variable:
      - **Key:** `MONGODB_URI`
      - **Value:** `mongodb+srv://<usuario>:<password>@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority`
-   - Render cifra esta variable en reposo y solo la expone en memoria al proceso de la aplicación.
+   - Render cifra esta variable en reposo y solo la expone en memoria al proceso de la aplicación en tiempo de ejecución.
 
 2. **En Local (Desarrollo):**
    - Se guarda en un archivo `.env` en la raíz del repositorio.
-   - El archivo `.env` está incluido en `.gitignore` y **jamás** se sube a GitHub.
+   - El archivo `.env` está expresamente incluido en `.gitignore` y **jamás** se sube al control de versiones.
    - Utiliza `.env.example` como plantilla.
 
-3. **En GitHub Pages (Frontend):**
-   - **¡El string de conexión a Atlas NUNCA debe estar en el frontend!**
-   - Tu código en GitHub Pages solo necesita:
-     - La URL de tu servicio en Render (ej. `https://vg-mongo-proxy.onrender.com`).
-     - Tu clave de acceso `x-api-key` (la misma que defines en Render como `PROXY_API_KEY`).
+3. **En el Frontend / Cliente:**
+   - **¡El string de conexión a MongoDB NUNCA debe estar en el cliente!**
+   - El código en el navegador o cliente web únicamente necesita:
+     - La URL del servicio en Render (ej. `https://tu-servicio.onrender.com`).
+     - La clave de acceso `x-api-key` (la misma que defines en Render como `PROXY_API_KEY`).
 
 ---
 
@@ -76,16 +76,16 @@
 
 ### Opción 1: Crear Web Service Manualmente
 1. Entra a [Render Dashboard](https://dashboard.render.com/) y pulsa **New +** ➔ **Web Service**.
-2. Conecta tu repositorio de GitHub: `https://github.com/espinosa012/vg-mongo-proxy`.
+2. Conecta tu repositorio de GitHub.
 3. Configura los siguientes campos:
    - **Runtime:** `Python`
    - **Build Command:** `pip install .`
    - **Start Command:** `uvicorn vg_mongo_proxy.main:app --host 0.0.0.0 --port $PORT`
 4. En **Environment Variables**, añade:
    - `MONGODB_URI`: Tu cadena de conexión a MongoDB Atlas.
-   - `PROXY_API_KEY`: Una clave secreta para autorizar tus peticiones.
-   - `DEFAULT_DATABASE`: Nombre de la base de datos (ej. `tasks_db`).
-   - `CORS_ORIGINS`: Tu dominio en GitHub Pages (ej. `https://espinosa012.github.io,http://localhost:5173`).
+   - `PROXY_API_KEY`: Una clave secreta para autorizar peticiones a la API.
+   - `DEFAULT_DATABASE`: Nombre de la base de datos por defecto (ej. `app_db`).
+   - `CORS_ORIGINS`: Dominio(s) de tu frontend autorizados (ej. `https://tu-dominio.com,http://localhost:5173`).
 5. Pulsa **Deploy Web Service**.
 
 ### Opción 2: Usar Render Blueprint (`render.yaml`)
@@ -93,14 +93,14 @@ El repositorio incluye un archivo [`render.yaml`](./render.yaml). Puedes crear u
 
 ---
 
-## 💻 Integración desde GitHub Pages (JavaScript)
+## 💻 Integración Frontend (JavaScript)
 
 ### 1. Cliente Base y Manejo de Cold Starts (Render Free Tier)
 
-Render suspende los servicios gratuitos tras 15 minutos de inactividad. Puedes usar el endpoint `/health` para despertar el proxy y comprobar el estado:
+Los servicios en la capa gratuita de Render entran en suspensión tras 15 minutos sin tráfico. Puedes usar el endpoint público `/health` para despertar el proxy y verificar conectividad:
 
 ```javascript
-const PROXY_URL = "https://vg-mongo-proxy.onrender.com";
+const PROXY_URL = "https://tu-servicio.onrender.com";
 const API_KEY = "tu-clave-secreta-definida-en-render";
 
 // Comprobar conexion / despertar servidor
@@ -116,10 +116,10 @@ async function checkServerHealth() {
 }
 ```
 
-### 2. Crear una Tarea (`insertOne`)
+### 2. Crear un Documento (`insertOne`)
 
 ```javascript
-async function createTask(title, description) {
+async function createDocument(collection, documentData) {
   const res = await fetch(`${PROXY_URL}/action/insertOne`, {
     method: "POST",
     headers: {
@@ -127,12 +127,9 @@ async function createTask(title, description) {
       "x-api-key": API_KEY,
     },
     body: JSON.stringify({
-      collection: "tasks",
+      collection,
       document: {
-        title,
-        description,
-        status: "pending",
-        attachments: [],
+        ...documentData,
         createdAt: { "$date": new Date().toISOString() },
       },
     }),
@@ -142,12 +139,10 @@ async function createTask(title, description) {
 }
 ```
 
-### 3. Listar Tareas (`find`)
+### 3. Consultar Documentos (`find`)
 
 ```javascript
-async function getTasks(statusFilter = null) {
-  const filter = statusFilter ? { status: statusFilter } : {};
-
+async function getDocuments(collection, filter = {}, sort = { createdAt: -1 }, limit = 50) {
   const res = await fetch(`${PROXY_URL}/action/find`, {
     method: "POST",
     headers: {
@@ -155,10 +150,10 @@ async function getTasks(statusFilter = null) {
       "x-api-key": API_KEY,
     },
     body: JSON.stringify({
-      collection: "tasks",
+      collection,
       filter,
-      sort: { createdAt: -1 },
-      limit: 50,
+      sort,
+      limit,
     }),
   });
   const data = await res.json();
@@ -193,13 +188,13 @@ async function uploadAttachment(fileInput) {
 Puedes cargar imágenes directamente en etiquetas `<img>` o enlaces pasándoles la clave en la URL:
 
 ```html
-<!-- Enlace de descarga -->
-<a href="https://vg-mongo-proxy.onrender.com/files/60d5ec49f1b2c8b1f8e4e1a1?key=tu-clave-secreta&download=true">
-  Descargar Adjunto
+<!-- Enlace de descarga directa -->
+<a href="https://tu-servicio.onrender.com/files/60d5ec49f1b2c8b1f8e4e1a1?key=tu-clave-secreta&download=true">
+  Descargar Fichero
 </a>
 
 <!-- Imagen directa en el navegador -->
-<img src="https://vg-mongo-proxy.onrender.com/files/60d5ec49f1b2c8b1f8e4e1a1?key=tu-clave-secreta" alt="Adjunto" />
+<img src="https://tu-servicio.onrender.com/files/60d5ec49f1b2c8b1f8e4e1a1?key=tu-clave-secreta" alt="Vista previa" />
 ```
 
 ---
@@ -208,7 +203,7 @@ Puedes cargar imágenes directamente en etiquetas `<img>` o enlaces pasándoles 
 
 ### Sistema
 - `GET /`: Información básica de la versión y estado.
-- `GET /health`: Healthcheck público y ping de latencia con MongoDB Atlas.
+- `GET /health`: Healthcheck público y ping de latencia con MongoDB.
 - `GET /docs`: Documentación interactiva Swagger UI de FastAPI.
 
 ### Data API (`/action/*`)
@@ -242,7 +237,7 @@ Puedes cargar imágenes directamente en etiquetas `<img>` o enlaces pasándoles 
 
 ```bash
 # 1. Clonar repositorio
-git clone https://github.com/espinosa012/vg-mongo-proxy.git
+git clone <URL_DE_TU_REPOSITORIO>
 cd vg-mongo-proxy
 
 # 2. Crear entorno virtual
