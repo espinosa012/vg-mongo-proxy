@@ -39,7 +39,7 @@ Proxy HTTP desarrollado con FastAPI y Motor para gestionar operaciones sobre cl�
                  | TCP / TLS (Driver MongoDB)
                  v
 +------------------------------------+
-|           MongoDB Atlas            |
+|      Clúster MongoDB / Atlas       |
 |  * Colecciones de documentos       |
 |  * Buckets GridFS (fs.files/chunks)|
 +------------------------------------+
@@ -47,44 +47,68 @@ Proxy HTTP desarrollado con FastAPI y Motor para gestionar operaciones sobre cl�
 
 ---
 
-## Seguridad y Gestión de Credenciales
+### Seguridad y Gestión de Credenciales
 
 La cadena de conexión a la base de datos (`MONGODB_URI`) contiene información crítica de acceso y nunca debe ser expuesta ni almacenada en el código fuente ni en el cliente web.
 
-### 1. Entorno de Producción (Render)
-* Las credenciales se configuran como variables de entorno directamente en el panel de control del servicio (`Environment` > `Environment Variables`):
-  * `MONGODB_URI`: Cadena de conexión al clúster (`mongodb+srv://...`).
+### 1. Entorno de Producción (Cualquier Servidor o Plataforma Cloud)
+* Las credenciales se configuran mediante variables de entorno del sistema o a través del gestor de secretos del servidor / proveedor:
+  * `MONGODB_URI`: Cadena de conexión al clúster (`mongodb+srv://...` o `mongodb://...`).
   * `PROXY_API_KEY`: Clave estricta de autorización para acceder al proxy.
   * `DEFAULT_DATABASE`: Nombre de la base de datos predeterminada.
-  * `CORS_ORIGINS`: Lista delimitada por comas de orígenes HTTP autorizados.
-* Estas variables son inyectadas en memoria durante la ejecución del proceso y permanecen cifradas en reposo.
+  * `CORS_ORIGINS`: Lista delimitada por comas de orígenes HTTP autorizados (o `*` para permitir todos).
+* Estas variables son inyectadas en memoria durante la ejecución del proceso y no se persisten en archivos rastreados.
 
 ### 2. Entorno Local (Desarrollo)
 * Se definen en un archivo `.env` local en la raíz del proyecto.
 * El archivo `.env` está explícitamente excluido en `.gitignore` para evitar su inclusión accidental en el sistema de control de versiones. Se proporciona un archivo `.env.example` como plantilla referencial.
 
 ### 3. Aislamiento del Cliente
-* Las aplicaciones frontend únicamente interactúan con la interfaz HTTP del proxy utilizando la URL pública del servicio y la cabecera `x-api-key`. Bajo ninguna circunstancia deben tener visibilidad de las credenciales de MongoDB.
+* Las aplicaciones cliente únicamente interactúan con la interfaz HTTP del proxy utilizando la URL pública del servicio y la cabecera `x-api-key`. Bajo ninguna circunstancia deben tener visibilidad de las credenciales de MongoDB.
 
 ---
 
 ## Despliegue
 
-### Despliegue Manual en Render
-1. Acceder al panel de control de Render y crear un nuevo **Web Service**.
-2. Vincular el repositorio del proyecto.
-3. Especificar los parámetros de ejecución:
-   * **Runtime:** `Python`
-   * **Build Command:** `pip install .`
-   * **Start Command:** `uvicorn vg_mongo_proxy.main:app --host 0.0.0.0 --port $PORT`
-4. Declarar las variables de entorno requeridas:
-   * `MONGODB_URI`: Cadena de conexión a MongoDB.
-   * `PROXY_API_KEY`: Clave de seguridad del proxy.
-   * `DEFAULT_DATABASE`: Base de datos objetivo.
-   * `CORS_ORIGINS`: Orígenes autorizados (ejemplo: `https://tu-dominio.com`).
+La aplicación es completamente agnóstica de la infraestructura y puede ejecutarse en cualquier servidor Linux/macOS/Windows, contenedor Docker, clúster de Kubernetes, máquina virtual (VPS) o plataforma de aplicaciones (PaaS).
 
-### Despliegue Automatizado (Blueprint)
-El repositorio incluye el archivo de especificación `render.yaml`. Es posible inicializar el servicio seleccionando la opción **Blueprint** en Render, lo cual aprovisiona automáticamente la infraestructura y configura la ruta de healthcheck.
+### Opción 1: Ejecución Directa con Python y Uvicorn
+Para servidores dedicados, VPS (con systemd, Supervisor o Nginx reverse proxy) o plataformas PaaS:
+
+1. Clonar el repositorio e instalar la aplicación:
+   ```bash
+   pip install .
+   ```
+2. Establecer las variables de entorno necesarias (`MONGODB_URI`, `PROXY_API_KEY`, etc.).
+3. Iniciar el servidor ASGI:
+   ```bash
+   uvicorn vg_mongo_proxy.main:app --host 0.0.0.0 --port ${PORT:-8000}
+   ```
+
+### Opción 2: Despliegue con Docker / Contenedores
+El proyecto incluye un `Dockerfile` optimizado:
+
+1. Construir la imagen del contenedor:
+   ```bash
+   docker build -t vg-mongo-proxy .
+   ```
+2. Ejecutar el contenedor pasando las variables de entorno:
+   ```bash
+   docker run -d \
+     -p 8000:8000 \
+     --env MONGODB_URI="mongodb+srv://..." \
+     --env PROXY_API_KEY="clave-secreta" \
+     --env DEFAULT_DATABASE="app_db" \
+     --name vg-mongo-proxy \
+     vg-mongo-proxy
+   ```
+   O utilizando un archivo `.env`:
+   ```bash
+   docker run -d -p 8000:8000 --env-file .env --name vg-mongo-proxy vg-mongo-proxy
+   ```
+
+### Opción 3: Plataformas Cloud y PaaS
+La aplicación se adapta automáticamente a entornos que asignan puertos dinámicos a través de la variable `$PORT`. Para proveedores PaaS que admiten especificaciones declarativas de infraestructura, se incluye un archivo de referencia opcional `render.yaml`.
 
 ---
 
@@ -92,10 +116,10 @@ El repositorio incluye el archivo de especificación `render.yaml`. Es posible i
 
 ### 1. Inicialización y Comprobación de Estado (Health Check)
 
-En instancias con suspensión por inactividad (como el nivel gratuito de Render), se recomienda consultar el endpoint `/health` al inicio del ciclo de vida de la aplicación:
+En entornos serverless, contenedores o servicios con arranque en frío (cold start), se recomienda consultar el endpoint `/health` al inicio del ciclo de vida de la aplicación:
 
 ```javascript
-const PROXY_URL = "https://tu-servicio.onrender.com";
+const PROXY_URL = "https://api.tu-dominio.com";
 const API_KEY = "clave-configurada-en-el-proxy";
 
 async function verifyConnection() {
@@ -178,12 +202,12 @@ async function uploadFile(fileInstance) {
 
 ```html
 <!-- Enlace de descarga directa -->
-<a href="https://tu-servicio.onrender.com/files/60d5ec49f1b2c8b1f8e4e1a1?key=clave-configurada-en-el-proxy&download=true">
+<a href="https://api.tu-dominio.com/files/60d5ec49f1b2c8b1f8e4e1a1?key=clave-configurada-en-el-proxy&download=true">
   Descargar documento
 </a>
 
 <!-- Visualización en línea (imágenes) -->
-<img src="https://tu-servicio.onrender.com/files/60d5ec49f1b2c8b1f8e4e1a1?key=clave-configurada-en-el-proxy" alt="Archivo" />
+<img src="https://api.tu-dominio.com/files/60d5ec49f1b2c8b1f8e4e1a1?key=clave-configurada-en-el-proxy" alt="Archivo" />
 ```
 
 ---

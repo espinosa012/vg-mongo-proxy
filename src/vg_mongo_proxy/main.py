@@ -54,7 +54,7 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["System"])
     async def health():
-        """Health check endpoint to wake up Render instance and verify MongoDB connectivity."""
+        """Health check endpoint to verify service readiness and MongoDB connectivity."""
         ping_result = await ping_database()
         if ping_result.get("connected"):
             return {
